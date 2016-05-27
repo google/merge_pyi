@@ -16,9 +16,8 @@ def main():
 
 
 class Args(object):
-    def __init__(self, use_pyi=False, pep484=False):
-        self.use_pyi = use_pyi
-        self.pep484 = pep484
+    def __init__(self, as_comments=False):
+        self.as_comments = as_comments
 
     def __str__(self):
         pairs = sorted(list(vars(self).iteritems()))
@@ -28,12 +27,11 @@ class Args(object):
     def expected_ext(self):
         """Extension of expected filename."""
         exts = {
-            (1, 1): 'pep484',
-            (1, 0): 'comment',
-            (0, 0): 'nopyi'
+            0: 'pep484',
+            1: 'comment',
         }
-        key = int(self.use_pyi), int(self.pep484)
-        return exts[key] + '.py'
+        return exts[int(self.as_comments)] + '.py'
+
 
 class TestRunner(object):
     file_pat = re.compile(r'(?P<filename>(?P<base>.+?)\.(?P<ext>.*))$')
@@ -62,12 +60,10 @@ class TestRunner(object):
 
         self.results = {True: 0, False: 0}
 
-        # "use_pyi" doesn't mean anything to merge_pyi, only to us
         args_list = [
-            Args(use_pyi=1, pep484=1),
-            Args(use_pyi=1, pep484=0),
-            Args(use_pyi=0, pep484=0),
-            ]
+            Args(as_comments=0),
+            Args(as_comments=1),
+           ]
 
         for args in args_list:
             args.futures = []
@@ -75,7 +71,7 @@ class TestRunner(object):
             self.args = args
             self.logger.info("setting args: %s", args)
             for base, files_by_ext in sorted(files_by_base.iteritems()):
-                if PY not in files_by_ext:
+                if not (PY in files_by_ext and PYI in files_by_ext):
                     continue
 
                 self.test_option_permutations(base, files_by_ext)
@@ -94,9 +90,6 @@ class TestRunner(object):
         if not self.overwrite_expected and expected_ext not in files_by_ext:
             return
 
-        if self.args.use_pyi and PYI not in files_by_ext:
-            return
-
         ret = self._dotest(base, files_by_ext, expected_ext)
 
         self.logger.info("%s %s", "PASS" if ret else "FAIL", base)
@@ -104,10 +97,7 @@ class TestRunner(object):
 
     def _dotest(self, base, files_by_ext, expected_ext):
         py_input = self.read_file(files_by_ext[PY])
-
-        pyi_src = None
-        if self.args.use_pyi:
-            pyi_src = self.read_file(files_by_ext[PYI])
+        pyi_src = self.read_file(files_by_ext[PYI])
 
         try:
             output = merge_pyi.annotate_string(self.args, py_input, pyi_src)
