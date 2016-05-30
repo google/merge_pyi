@@ -500,9 +500,6 @@ class FixAnnotate(BaseFix):
         # insert type annotations in PEP484 style. Otherwise insert as comments
         self._annotate_pep484 = False
 
-        # Strip comments and, formatting from type annotations (False breaks comment output mode)
-        self._strip_pyi_formatting = not self.annotate_pep484
-
     @property
     def annotate_pep484(self):
         return self._annotate_pep484
@@ -510,7 +507,6 @@ class FixAnnotate(BaseFix):
     @annotate_pep484.setter
     def annotate_pep484(self, value):
         self._annotate_pep484 = bool(value)
-        self._strip_pyi_formatting = not self.annotate_pep484
 
     def transform(self, node, results):
         assert self.parsed_pyi, 'must provide pyi_string'
@@ -522,48 +518,54 @@ class FixAnnotate(BaseFix):
         cur_sig = FuncSignature(node, results)
         if not self.can_annotate(cur_sig):
             return
+        pyi_sig = self.parsed_pyi.funcs[cur_sig.full_name]
 
         if FixAnnotate.counter is not None:
             FixAnnotate.counter -= 1
 
-        # Compute the annotation, or directly insert if not self.emit_as_comment
-        annot = self.get_or_insert_annotation(cur_sig)
-
-        if not self.annotate_pep484 and annot:
+        if self.annotate_pep484:
+            self.insert_annotation(cur_sig, pyi_sig)
+        else:
+            annot = self.get_comment_annotation(cur_sig, pyi_sig)
             if cur_sig.try_insert_comment_annotation(annot) and 'Any' in annot:
                 touch_import('typing', 'Any', node)
 
         self.add_globals(node)
 
-    def get_or_insert_annotation(self, cur_sig):
-        """If self.annotate_pep484, insert, otherwise return as comment string"""
+    def insert_annotation(self, cur_sig, pyi_sig):
+        """Insert annotation in PEP484 format."""
+        for i, arg_sig in enumerate(cur_sig.arg_sigs):
+            new_type = clean_clone(pyi_sig.arg_sigs[i].arg_type,
+                                   False)
+
+            if new_type:
+                arg_sig.insert_annotation(new_type)
+
+        if pyi_sig.ret_type:
+            cur_sig.insert_ret_annotation(pyi_sig.ret_type)
+
+    def get_comment_annotation(self, cur_sig, pyi_sig):
+        """Return function annotation as a comment string, doesn't modify tree."""
         arg_types = []
         for i, arg_sig in enumerate(cur_sig.arg_sigs):
-            pyi_sig = self.parsed_pyi.funcs[cur_sig.full_name]
-            new_type = pyi_sig.arg_sigs[i].arg_type
-            new_type = clean_clone(new_type, self._strip_pyi_formatting)
+            is_first = (i == 0)
+            new_type = clean_clone(pyi_sig.arg_sigs[i].arg_type,
+                                   True)
 
-            if self.annotate_pep484:
-                if new_type:
-                    arg_sig.insert_annotation(new_type)
+            if new_type:
+                new_type_str = str(new_type).strip()
+            elif self.infer_should_annotate(cur_sig, arg_sig, is_first):
+                new_type_str = 'Any'
             else:
-                is_first = (i == 0)
+                continue
 
-                if new_type:
-                    arg_types.append(arg_sig.stars + str(new_type).strip())
-                elif self.infer_should_annotate(cur_sig, arg_sig, is_first):
-                    arg_types.append(arg_sig.stars + 'Any')
+            arg_types.append(arg_sig.stars + new_type_str)
 
-        pyi_sig = self.parsed_pyi.funcs[cur_sig.full_name]
         ret_type = pyi_sig.ret_type
+        if not ret_type:
+            ret_type = self.infer_ret_type(cur_sig)
 
-        if not self.annotate_pep484:
-            if not ret_type:
-                ret_type = self.infer_ret_type(cur_sig)
-
-            return '(' + ', '.join(arg_types) + ') -> ' + str(ret_type).strip()
-        elif ret_type:
-            cur_sig.insert_ret_annotation(ret_type)
+        return '(' + ', '.join(arg_types) + ') -> ' + str(ret_type).strip()
 
     def can_annotate(self, cur_sig):
         if cur_sig.has_pep484_annotations or cur_sig.has_comment_annotations:
