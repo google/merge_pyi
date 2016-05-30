@@ -6,6 +6,8 @@ Sample use:
 
        python merge_pyi.py --pep484 --diff testdata/simple.py testdata/simple.pyi
 
+[PyCon 2016 slides](https://docs.google.com/a/google.com/presentation/d/1S3Pa-6ogG-yNcQpbU-JrhiFEHNtw_8laF1svOekuYOI/pub?start=false&loop=false&delayms=3000)
+
 #### Regression tests
 
 ```
