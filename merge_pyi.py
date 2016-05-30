@@ -504,43 +504,41 @@ class FixAnnotate(BaseFix):
     def transform(self, node, results):
         assert self.parsed_pyi, 'must provide pyi_string'
 
-        cur_sig = FuncSignature(node, results)
-        if not self.can_annotate(cur_sig):
+        src_sig = FuncSignature(node, results)
+        if not self.can_annotate(src_sig):
             return
-        pyi_sig = self.parsed_pyi.funcs[cur_sig.full_name]
+        pyi_sig = self.parsed_pyi.funcs[src_sig.full_name]
 
         if self.annotate_pep484:
-            self.insert_annotation(cur_sig, pyi_sig)
+            self.insert_annotation(src_sig, pyi_sig)
         else:
-            annot = self.get_comment_annotation(cur_sig, pyi_sig)
-            if cur_sig.try_insert_comment_annotation(annot) and 'Any' in annot:
+            annot = self.get_comment_annotation(src_sig, pyi_sig)
+            if src_sig.try_insert_comment_annotation(annot) and 'Any' in annot:
                 touch_import('typing', 'Any', node)
 
         self.add_globals(node)
 
-    def insert_annotation(self, cur_sig, pyi_sig):
+    def insert_annotation(self, src_sig, pyi_sig):
         """Insert annotation in PEP484 format."""
-        for i, arg_sig in enumerate(cur_sig.arg_sigs):
-            new_type = clean_clone(pyi_sig.arg_sigs[i].arg_type,
-                                   False)
-
-            if new_type:
-                arg_sig.insert_annotation(new_type)
+        for arg_sig, pyi_arg_sig in zip(src_sig.arg_sigs, pyi_sig.arg_sigs):
+            if not pyi_arg_sig.arg_type:
+                continue
+            new_type = clean_clone(pyi_arg_sig.arg_type, False)
+            arg_sig.insert_annotation(new_type)
 
         if pyi_sig.ret_type:
-            cur_sig.insert_ret_annotation(pyi_sig.ret_type)
+            src_sig.insert_ret_annotation(pyi_sig.ret_type)
 
-    def get_comment_annotation(self, cur_sig, pyi_sig):
+    def get_comment_annotation(self, src_sig, pyi_sig):
         """Return function annotation as a comment string, doesn't modify tree."""
         arg_types = []
-        for i, arg_sig in enumerate(cur_sig.arg_sigs):
+        for i, (arg_sig, pyi_arg_sig) in enumerate(zip(src_sig.arg_sigs, pyi_sig.arg_sigs)):
             is_first = (i == 0)
-            new_type = clean_clone(pyi_sig.arg_sigs[i].arg_type,
-                                   True)
+            new_type = clean_clone(pyi_arg_sig.arg_type, True)
 
             if new_type:
                 new_type_str = str(new_type).strip()
-            elif self.infer_should_annotate(cur_sig, arg_sig, is_first):
+            elif self.infer_should_annotate(src_sig, arg_sig, is_first):
                 new_type_str = 'Any'
             else:
                 continue
@@ -549,27 +547,27 @@ class FixAnnotate(BaseFix):
 
         ret_type = pyi_sig.ret_type
         if not ret_type:
-            ret_type = self.infer_ret_type(cur_sig)
+            ret_type = self.infer_ret_type(src_sig)
 
         return '(' + ', '.join(arg_types) + ') -> ' + str(ret_type).strip()
 
-    def can_annotate(self, cur_sig):
-        if cur_sig.has_pep484_annotations or cur_sig.has_comment_annotations:
-            self.logger.warning('already annotated, skipping %s', cur_sig)
+    def can_annotate(self, src_sig):
+        if src_sig.has_pep484_annotations or src_sig.has_comment_annotations:
+            self.logger.warning('already annotated, skipping %s', src_sig)
             return False
 
-        if cur_sig.full_name not in self.parsed_pyi.funcs:
-            self.logger.warning('no signature for %s, skipping', cur_sig)
+        if src_sig.full_name not in self.parsed_pyi.funcs:
+            self.logger.warning('no signature for %s, skipping', src_sig)
             return False
 
-        pyi_sig = self.parsed_pyi.funcs[cur_sig.full_name]
+        pyi_sig = self.parsed_pyi.funcs[src_sig.full_name]
 
         if not pyi_sig.has_pep484_annotations:
             self.logger.warning('ignoring pyi definition with no annotations: %s', pyi_sig)
             return False
 
-        if not self.func_sig_compatible(cur_sig, pyi_sig):
-            self.logger.warning('incompatible annotation, skipping %s', cur_sig)
+        if not self.func_sig_compatible(src_sig, pyi_sig):
+            self.logger.warning('incompatible annotation, skipping %s', src_sig)
             return False
 
         return True
@@ -616,15 +614,15 @@ class FixAnnotate(BaseFix):
             root.insert_child(insert_pos + offset, node)
 
     @staticmethod
-    def func_sig_compatible(cur_sig, pyi_sig):
-        """Can cur_sig be annotated with the info in pyi_sig: number of arguments must match,
+    def func_sig_compatible(src_sig, pyi_sig):
+        """Can src_sig be annotated with the info in pyi_sig: number of arguments must match,
         they must have the same star signature and they can't be tuple arguments.
         """
 
-        if len(pyi_sig.arg_sigs) != len(cur_sig.arg_sigs):
+        if len(pyi_sig.arg_sigs) != len(src_sig.arg_sigs):
             return False
 
-        for pyi, cur in zip(pyi_sig.arg_sigs, cur_sig.arg_sigs):
+        for pyi, cur in zip(pyi_sig.arg_sigs, src_sig.arg_sigs):
             # Entirely skip functions that use tuple args
             if cur.is_tuple or pyi.is_tuple:
                 return False
@@ -636,15 +634,15 @@ class FixAnnotate(BaseFix):
         return True
 
     @staticmethod
-    def infer_ret_type(cur_sig):
-        """Heuristic for return value of a function."""
-        if cur_sig.short_name == '__init__' or not cur_sig.has_return_exprs:
+    def infer_ret_type(src_sig):
+        """Heuristic for return type of a function."""
+        if src_sig.short_name == '__init__' or not src_sig.has_return_exprs:
             return 'None'
         return 'Any'
 
     @staticmethod
     def infer_should_annotate(func, arg, at_start):
-        """Heuristic for whether arg (in func) should be annotated."""
+        """Heuristic for whether arg, in func, should be annotated."""
 
         if func.is_method and at_start and 'staticmethod' not in func.decorators:
             # Don't annotate the first argument if it's named 'self'.
