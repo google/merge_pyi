@@ -85,8 +85,7 @@ import os
 
 from lib2to3 import pygram, pytree, refactor
 from lib2to3.fixer_base import BaseFix
-from lib2to3.fixer_util import (token, syms, touch_import, find_indentation, find_root,
-                                does_tree_import, FromImport, Newline)
+from lib2to3.fixer_util import token, syms, touch_import, find_indentation, find_root
 from lib2to3.patcomp import compile_pattern
 from lib2to3.pgen2 import driver
 from lib2to3.pytree import Leaf, Node
@@ -494,9 +493,6 @@ class FixAnnotate(BaseFix):
 
         # Options below
 
-        # List of things to import from "__future__"
-        self.future_imports = tuple()
-
         # insert type annotations in PEP484 style. Otherwise insert as comments
         self._annotate_pep484 = False
 
@@ -613,30 +609,21 @@ class FixAnnotate(BaseFix):
         import_idx = [idx for idx, node in enumerate(root.children)
                       if self.import_pattern.match(node)]
         if import_idx:
-            future_insert_pos = import_idx[0]
-            top_insert_pos = import_idx[-1] + 1
+            insert_pos = import_idx[-1] + 1
         else:
-            future_insert_pos = top_insert_pos = 0
+            insert_pos = 0
 
             # first string (normally docstring)
             for idx, node in enumerate(root.children):
                 if (node.type == syms.simple_stmt and node.children and
                         node.children[0].type == token.STRING):
-                    future_insert_pos = top_insert_pos = idx + 1
+                    insert_pos = idx + 1
                     break
 
         top_lines = '\n'.join(top_lines)
         top_lines = Util.parse_string(top_lines)  # strips some newlines
         for offset, node in enumerate(top_lines.children[:-1]):
-            root.insert_child(top_insert_pos + offset, node)
-
-        # touch_import doesn't do proper order for __future__
-        pkg = '__future__'
-        future_imports = [n for n in self.future_imports if not does_tree_import(pkg, n, root)]
-        for offset, name in enumerate(future_imports):
-            node = FromImport(pkg, [Leaf(token.NAME, name, prefix=" ")])
-            node = Node(syms.simple_stmt, [node, Newline()])
-            root.insert_child(future_insert_pos + offset, node)
+            root.insert_child(insert_pos + offset, node)
 
     @staticmethod
     def func_sig_compatible(cur_sig, pyi_sig):
@@ -849,7 +836,6 @@ def annotate_string(args, py_src, pyi_src):
     tool = StandaloneRefactoringTool(options={})
     fixer = tool.fixer
 
-    fixer.future_imports = tuple(args.futures)
     fixer.annotate_pep484 = not args.as_comments
     fixer.set_pyi_string(pyi_src)
 
@@ -887,11 +873,6 @@ def parse_args(argv):
 
     group.add_argument('--diff', action='store_true',
                        help='print out a diff')
-
-    # TODO: strip out this option
-    parser.add_argument('--future-import', type=str, action='append', dest='futures',
-                        metavar='foo', default=[],
-                        help='inserts \'from __future__ import foo\'')
 
     parser.add_argument('py', type=argparse.FileType('r'), metavar='file.py',
                         help='python file to annotate')
