@@ -81,7 +81,6 @@ from __future__ import print_function
 from collections import namedtuple
 import itertools
 import logging
-import os
 
 from lib2to3 import pygram, pytree, refactor
 from lib2to3.fixer_base import BaseFix
@@ -478,8 +477,6 @@ class FixAnnotate(BaseFix):
 
     PATTERN = FuncSignature.PATTERN
 
-    counter = None if not os.getenv('MAXFIXES') else int(os.getenv('MAXFIXES'))
-
     def __init__(self, options, log):
         super(FixAnnotate, self).__init__(options, log)
 
@@ -507,17 +504,10 @@ class FixAnnotate(BaseFix):
     def transform(self, node, results):
         assert self.parsed_pyi, 'must provide pyi_string'
 
-        if FixAnnotate.counter is not None:
-            if FixAnnotate.counter <= 0:
-                return
-
         cur_sig = FuncSignature(node, results)
         if not self.can_annotate(cur_sig):
             return
         pyi_sig = self.parsed_pyi.funcs[cur_sig.full_name]
-
-        if FixAnnotate.counter is not None:
-            FixAnnotate.counter -= 1
 
         if self.annotate_pep484:
             self.insert_annotation(cur_sig, pyi_sig)
