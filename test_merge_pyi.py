@@ -3,25 +3,67 @@ import os
 import re
 import difflib
 import logging
+import unittest
+import collections
 
 import merge_pyi
 
 PY, PYI = 'py', 'pyi'
+OVERWRITE_EXPECTED = 0  # flip to regenerate expected files
 
 
 def main():
     logging.basicConfig(level=logging.CRITICAL)  # hide fixer's messages
-    tr = TestRunner('testdata')
-    tr.run()
+    tests = TestBuilder().build('testdata')
+    unittest.TextTestRunner(verbosity=2).run(tests)
+
+
+class TestBuilder(object):
+    def build(self, data_dir):
+        """Return a unittest.TestSuite with regression tests for the files in data_dir"""
+        files_by_base = self._get_files_by_base(data_dir)
+
+        args_list = [
+            Args(as_comments=0),
+            Args(as_comments=1),
+        ]
+
+        suite = unittest.TestSuite()
+        for args in args_list:
+            arg_suite = unittest.TestSuite()
+            suite.addTest(arg_suite)
+
+            for base, files_by_ext in sorted(files_by_base.items()):
+                if not (PY in files_by_ext and PYI in files_by_ext):
+                    continue
+
+                if not OVERWRITE_EXPECTED and args.expected_ext not in files_by_ext:
+                    continue
+
+                py, pyi = [files_by_ext[x] for x in (PY, PYI)]
+                outfile = os.path.join(data_dir, base + '.' + args.expected_ext)
+
+                test = RegressionTest(args, py, pyi, outfile)
+                arg_suite.addTest(test)
+
+        return suite
+
+    def _get_files_by_base(self, data_dir):
+        files = os.listdir(data_dir)
+
+        file_pat = re.compile(r'(?P<filename>(?P<base>.+?)\.(?P<ext>.*))$')
+        matches = [m for m in map(file_pat.match, files) if m]
+        ret = collections.defaultdict(dict)
+        for m in matches:
+            base, ext, filename = m.group('base'), m.group('ext'), m.group('filename')
+            ret[base][ext] = os.path.join(data_dir, filename)
+
+        return ret
 
 
 class Args(object):
     def __init__(self, as_comments=False):
         self.as_comments = as_comments
-
-    def __str__(self):
-        pairs = sorted(list(vars(self).iteritems()))
-        return ', '.join(['%s=%s' % pair for pair in pairs])
 
     @property
     def expected_ext(self):
@@ -33,95 +75,34 @@ class Args(object):
         return exts[int(self.as_comments)] + '.py'
 
 
-class TestRunner(object):
-    file_pat = re.compile(r'(?P<filename>(?P<base>.+?)\.(?P<ext>.*))$')
-    overwrite_expected = 0
-    print_diff = 0
-    logger = logging.getLogger("TestRunner")
-    logger.setLevel(logging.DEBUG)
+class RegressionTest(unittest.TestCase):
+    def __init__(self, args, py, pyi, outfile):
+        super(RegressionTest, self).__init__()
+        self.args = args  # merge_pyi args
+        self.py = py
+        self.pyi = pyi
+        self.outfile = outfile
 
-    def __init__(self, test_data_dir):
-        self.results = None
-        self.test_data_dir = test_data_dir
+    def __str__(self):
+        return os.path.basename(self.outfile)
 
-        # merge_pyi args
-        self.args = None
+    def runTest(self):
+        py_input, pyi_src = [_read_file(f) for f in (self.py, self.pyi)]
 
-    def run(self):
-        files = os.listdir(self.test_data_dir)
+        output = merge_pyi.annotate_string(self.args, py_input, pyi_src)
 
-        matches = [m for m in map(self.file_pat.match, files) if m]
-        files_by_base = {}
-        for m in matches:
-            base, ext, filename = m.group('base'), m.group('ext'), m.group('filename')
-            if base not in files_by_base:
-                files_by_base[base] = {}
-            files_by_base[base][ext] = filename
-
-        self.results = {True: 0, False: 0}
-
-        args_list = [
-            Args(as_comments=0),
-            Args(as_comments=1),
-           ]
-
-        for args in args_list:
-            args.futures = []
-
-            self.args = args
-            self.logger.info("setting args: %s", args)
-            for base, files_by_ext in sorted(files_by_base.iteritems()):
-                if not (PY in files_by_ext and PYI in files_by_ext):
-                    continue
-
-                self.test_option_permutations(base, files_by_ext)
-
-        self.logger.info("Test results: %s", self.results)
-
-    def read_file(self, filename):
-        filename = os.path.join(self.test_data_dir, filename)
-        with open(filename) as f:
-            return f.read()
-
-    def test_option_permutations(self, base, files_by_ext):
-        """Run tests over various option permutations"""
-        expected_ext = self.args.expected_ext
-
-        if not self.overwrite_expected and expected_ext not in files_by_ext:
-            return
-
-        ret = self._dotest(base, files_by_ext, expected_ext)
-
-        self.logger.info("%s %s", "PASS" if ret else "FAIL", base)
-        self.results[ret] += 1
-
-    def _dotest(self, base, files_by_ext, expected_ext):
-        py_input = self.read_file(files_by_ext[PY])
-        pyi_src = self.read_file(files_by_ext[PYI])
-
-        try:
-            output = merge_pyi.annotate_string(self.args, py_input, pyi_src)
-        except Exception as e:
-            self.logger.info("Failed with exception %s", repr(e))
-            return False
-
-        if self.print_diff:
-            self.logger.info("Diff\n%s", _get_diff(py_input, output))
-
-        if self.overwrite_expected:
-            # write output to file, for future runs
-            filename = os.path.join(self.test_data_dir, base + '.' + expected_ext)
-
-            with open(filename, 'w') as f:
+        if OVERWRITE_EXPECTED:
+            with open(self.outfile, 'w') as f:
                 f.write(output)
         else:
-            expected = self.read_file(files_by_ext[expected_ext])
-
-            if expected != output:
-                self.logger.info("Failed. Diff:\n%s",
+            expected = _read_file(self.outfile)
+            self.failUnlessEqual(expected, output,
                                  _get_diff(expected, output))
-                return False
-        return True
+
+
+def _read_file(filename):
+    with open(filename) as f:
+        return f.read()
 
 
 def _get_diff(a, b):
