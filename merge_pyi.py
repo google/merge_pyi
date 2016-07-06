@@ -81,6 +81,7 @@ from __future__ import print_function
 from collections import namedtuple
 import itertools
 import logging
+import sys
 
 from lib2to3 import pygram, pytree, refactor
 from lib2to3.fixer_base import BaseFix
@@ -90,7 +91,7 @@ from lib2to3.pgen2 import driver
 from lib2to3.pytree import Leaf, Node
 
 __all__ = ['KnownError',
-           'FixAnnotate',
+           'FixMergePyi',
            'annotate_string',
            'main']
 
@@ -467,7 +468,7 @@ class FuncSignature(object):
         return split_comma(args)
 
 
-class FixAnnotate(BaseFix):
+class FixMergePyi(BaseFix):
 
     # This fixer is compatible with the bottom matcher.
     BM_compatible = True
@@ -478,7 +479,7 @@ class FixAnnotate(BaseFix):
     PATTERN = FuncSignature.PATTERN
 
     def __init__(self, options, log):
-        super(FixAnnotate, self).__init__(options, log)
+        super(FixMergePyi, self).__init__(options, log)
 
         # ParsedPyi obtained from .pyi file
         self.parsed_pyi = None
@@ -486,7 +487,7 @@ class FixAnnotate(BaseFix):
         # Did we add globals required by pyi to the top of the py file
         self.added_pyi_globals = False
 
-        self.logger = logging.getLogger('FixAnnotate')
+        self.logger = logging.getLogger(self.__class__.__name__)
 
         # Options below
 
@@ -759,7 +760,7 @@ class StandaloneRefactoringTool(refactor.RefactoringTool):
     @property
     def fixer(self):
         if not self._fixer:
-            self._fixer = FixAnnotate(self.options, self.fixer_log)
+            self._fixer = FixMergePyi(self.options, self.fixer_log)
         return self._fixer
 
 ParsedPyi = namedtuple('ParsedPyi', 'imports top_lines funcs')
@@ -872,13 +873,10 @@ def parse_args(argv):
 
 
 def main(argv=None):
-    """Apply the fixer without using the 2to3 main program.
+    """Apply FixMergePyi to a source file without using the 2to3 main program.
 
     Needed so we can have our own options.
     """
-    import logging
-    import sys
-
     logging.basicConfig(level=logging.DEBUG)
 
     if argv is None:
