@@ -1,26 +1,31 @@
 # Copyright (c) 2016 Google Inc. (under http://www.apache.org/licenses/LICENSE-2.0)
-import os
-import re
+import collections
 import difflib
 import logging
+import os
+import re
 import unittest
-import collections
 
 import merge_pyi
+
+
+__all__ = ('TestBuilder',
+           'load_tests')
+
 
 PY, PYI = 'py', 'pyi'
 OVERWRITE_EXPECTED = 0  # flip to regenerate expected files
 
 
-def main():
-    logging.basicConfig(level=logging.CRITICAL)  # hide fixer's messages
-    tests = TestBuilder().build('testdata')
-    unittest.TextTestRunner(verbosity=2).run(tests)
+def load_tests(unused_loader, standard_tests, unused_pattern):
+    standard_tests.addTests(TestBuilder().build('testdata'))
+    return standard_tests
 
 
 class TestBuilder(object):
+
     def build(self, data_dir):
-        """Return a unittest.TestSuite with regression tests for the files in data_dir"""
+        """Return a unittest.TestSuite with regression tests for the files in data_dir."""
         files_by_base = self._get_files_by_base(data_dir)
 
         args_list = [
@@ -62,6 +67,7 @@ class TestBuilder(object):
 
 
 class Args(object):
+
     def __init__(self, as_comments=False):
         self.as_comments = as_comments
 
@@ -76,8 +82,9 @@ class Args(object):
 
 
 class RegressionTest(unittest.TestCase):
+
     def __init__(self, args, py, pyi, outfile):
-        super(RegressionTest, self).__init__()
+        super(RegressionTest, self).__init__('run_test')
         self.args = args  # merge_pyi args
         self.py = py
         self.pyi = pyi
@@ -86,7 +93,7 @@ class RegressionTest(unittest.TestCase):
     def __str__(self):
         return os.path.basename(self.outfile)
 
-    def runTest(self):
+    def run_test(self):
         py_input, pyi_src = [_read_file(f) for f in (self.py, self.pyi)]
 
         output = merge_pyi.annotate_string(self.args, py_input, pyi_src)
@@ -113,4 +120,5 @@ def _get_diff(a, b):
 
 
 if __name__ == '__main__':
-    main()
+    logging.basicConfig(level=logging.CRITICAL)
+    unittest.main()
